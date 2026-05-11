@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ImgPress — Image Compressor</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="page">
+
+  <div class="brand">
+    <h1>Img<em>Press</em></h1>
+    <p>Batch image compressor</p>
+  </div>
+
+  <div id="drop-zone">
+    <input type="file" id="file-input" accept="image/*" multiple>
+    <h2>Drop images here</h2>
+    <p>or click to browse — up to 20 files, 50 MB each</p>
+  </div>
+
+  <div class="controls">
+    <div class="pill-group">
+      <button class="pill active" data-val="webp" onclick="setPill(this)">WebP</button>
+      <button class="pill" data-val="avif" onclick="setPill(this)">AVIF</button>
+      <button class="pill" data-val="jpeg" onclick="setPill(this)">JPEG</button>
+      <button class="pill" data-val="png"  onclick="setPill(this)">PNG</button>
+    </div>
+    <div class="quality-wrap">
+      <label for="q-range">Q</label>
+      <input type="range" id="q-range" min="1" max="100" value="80" step="1">
+      <span id="quality-val">80</span>
+    </div>
+    <select id="width-sel">
+      <option value="800">800px</option>
+      <option value="1200">1200px</option>
+      <option value="1600" selected>1600px</option>
+      <option value="2400">2400px</option>
+      <option value="9999">Original</option>
+    </select>
+    <button id="recompress-btn" onclick="recompress()">Apply</button>
+  </div>
+
+  <div id="file-list"></div>
+
+  <div id="summary">
+    <div class="summary-grid">
+      <div><div class="stat-val" id="s-orig">—</div><div class="stat-label">Original</div></div>
+      <div><div class="stat-val" id="s-comp">—</div><div class="stat-label">Compressed</div></div>
+      <div><div class="stat-val green" id="s-ratio">—</div><div class="stat-label">Saved</div></div>
+         <button class="dl-zip-btn" id="dl-zip-btn">
+      <span id="dl-label">Download all</span>
+    </button>
+    <a class="clear-link" id="clear-link">Clear all</a>
+    </div>
+  </div>
+
+  <div class="footer">
+    JPEG &middot; PNG &middot; WebP &middot; AVIF &middot; GIF &middot; TIFF &middot; BMP &middot; HEIC &middot; ICO<br>
+    Lossless &middot; Lossy &middot; Palette quantisation &middot; EXIF strip &middot; Auto resize
+  </div>
+</div>
+
+<script src="script.js"></script>
+</body>
+</html>
