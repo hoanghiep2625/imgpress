@@ -1,8 +1,14 @@
- const API_BASE = window.API_URL || 'http://localhost:3000'
+const API_BASE = window.location.origin || 'http://localhost:3000'
+
+  // Pre-load fflate ngay khi trang tải để Download All không bị delay
+  let _zipSync = null
+  import('https://cdn.jsdelivr.net/npm/fflate@0.8.2/esm/browser.js')
+    .then(m => { _zipSync = m.zipSync })
+    .catch(() => {})
  
   let items   = []   // { id: string, file: File, originalSize: number }[]
   let results = {}   // id → result
-  let fmt = 'webp'
+  let fmt = 'auto'
   let settingsDirty = false
  
   const fileList      = document.getElementById('file-list')
@@ -18,6 +24,28 @@
   const fileInput     = document.getElementById('file-input')
  
   const uid = () => Math.random().toString(36).slice(2, 10)
+
+  // ── Concurrency queue ─────────────────────────────────────────────────────────
+
+  const CONCURRENCY = 1   // sequential: 1 file at a time to avoid request timeout
+  let activeCount = 0
+  const queue = []
+
+  function enqueue(id, file) {
+    queue.push({ id, file })
+    drain()
+  }
+
+  function drain() {
+    while (activeCount < CONCURRENCY && queue.length) {
+      const { id, file } = queue.shift()
+      activeCount++
+      compressOne(id, file).finally(() => {
+        activeCount--
+        drain()
+      })
+    }
+  }
  
   // ── Controls ─────────────────────────────────────────────────────────────────
  
@@ -41,6 +69,7 @@
     settingsDirty = false
     recompressBtn.style.display = 'none'
     results = {}
+    queue.length = 0
     // Reset every card UI without touching DOM order
     items.forEach(({ id }) => {
       const pb = document.getElementById('pb-' + id)
@@ -51,7 +80,7 @@
       if (dl) dl.disabled = true
     })
     summary.style.display = 'none'
-    items.forEach(({ id, file }) => compressOne(id, file))
+    items.forEach(({ id, file }) => enqueue(id, file))
   }
  
   // ── Drop / pick ──────────────────────────────────────────────────────────────
@@ -67,11 +96,10 @@
  
     imgs.forEach(file => {
       const id = uid()
-      // originalSize is always file.size — the true source-file size, never changes
       const item = { id, file, originalSize: file.size }
-      items.unshift(item)               // prepend to state array
-      prependCard(item)                 // prepend to DOM
-      compressOne(id, file)             // kick off compression
+      items.unshift(item)
+      prependCard(item)
+      enqueue(id, file)
     })
   }
  
@@ -119,7 +147,6 @@
     actions.append(dlBtn, rmBtn)
     card.append(thumb, info, actions)
  
-    // Prepend: newest on top
     fileList.prepend(card)
   }
  
@@ -132,22 +159,36 @@
   }
  
   // ── Compress one file ─────────────────────────────────────────────────────────
- 
-  async function compressOne(id, file) {
-    const form = new FormData()
-    form.append('file', file)
- 
+
+  const FETCH_TIMEOUT_MS = 5 * 60 * 1000
+
+  async function fetchCompress(file, attempt = 0) {
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS)
     try {
+      const form = new FormData()
+      form.append('file', file)
       const res = await fetch(
         `${API_BASE}/compress/one?format=${fmt}&quality=${qRange.value}&width=${widthSel.value}`,
-        { method: 'POST', body: form }
+        { method: 'POST', body: form, signal: controller.signal }
       )
+      clearTimeout(timer)
       if (!res.ok) throw new Error('HTTP ' + res.status)
-      const r = await res.json()
+      return await res.json()
+    } catch (err) {
+      clearTimeout(timer)
+      if (attempt === 0 && (err.name === 'AbortError' || err.message.startsWith('HTTP 5'))) {
+        await new Promise(r => setTimeout(r, 1500))
+        return fetchCompress(file, 1)
+      }
+      throw err
+    }
+  }
+
+  async function compressOne(id, file) {
+    try {
+      const r = await fetchCompress(file)
  
-      // Always store originalSize from the source file, not from server response
-      // (server sees the file as-is; if user re-compresses an already-compressed file
-      //  the server's originalSize would be wrong for display purposes)
       const item = items.find(it => it.id === id)
       r.originalSize = item ? item.originalSize : r.originalSize
  
@@ -183,10 +224,9 @@
     if (r.error) return `<span class="badge badge-error">Failed: ${r.message || 'unknown'}</span>`
     const pct = Math.round((1 - r.compressedSize / r.originalSize) * 100)
     if (pct <= 0) {
-      // Already optimised — size would increase, skip download
       return `
         <span class="badge badge-error">Already optimised</span>
-        <span style="font-size:0.65rem;color:var(--muted);line-height:1.4">Ảnh đã được tối ưu từ trước,<br>không thể nén thêm.</span>`
+        <span style="font-size:0.65rem;color:var(--muted);line-height:1.4">Images are already optimized.</span>`
     }
     return `
       <span class="badge badge-success">−${pct}%</span>
@@ -229,35 +269,45 @@
   }
  
   // ── Download all ZIP ──────────────────────────────────────────────────────────
- 
+
   dlZipBtn.addEventListener('click', async () => {
     dlZipBtn.disabled = true
     dlLabel.innerHTML = '<span class="spin"></span> Preparing…'
- 
-    const form = new FormData()
-    // Only include files that actually got smaller
+
     const compressible = items.filter(it => {
       const r = results[it.id]
       if (!r || r.error) return false
       return Math.round((1 - r.compressedSize / r.originalSize) * 100) > 0
     })
-    if (!compressible.length) { alert('Không có ảnh nào cần tải về.'); dlZipBtn.disabled = false; updateSummary(); return }
-    compressible.forEach(it => form.append('files', it.file))
- 
+    if (!compressible.length) {
+      alert('No images to download.')
+      dlZipBtn.disabled = false
+      updateSummary()
+      return
+    }
+
     try {
-      const res = await fetch(
-        `${API_BASE}/compress/zip?format=${fmt}&quality=${qRange.value}&width=${widthSel.value}`,
-        { method: 'POST', body: form }
-      )
-      if (!res.ok) throw new Error('HTTP ' + res.status)
-      const blob = await res.blob()
-      const cd = res.headers.get('Content-Disposition') || ''
-      const match = cd.match(/filename="([^"]+)"/)
-      triggerDownload(URL.createObjectURL(blob), match ? match[1] : `imgpress-${Date.now()}.zip`)
+      const zipSync = _zipSync || (await import('https://cdn.jsdelivr.net/npm/fflate@0.8.2/esm/browser.js')).zipSync
+
+      const fileMap = {}
+      for (const it of compressible) {
+        const r = results[it.id]
+        const mime = r.mime || 'image/webp'
+        const ext  = mime.split('/')[1] || fmt
+        const base = it.file.name.replace(/\.[^.]+$/, '')
+        const byteStr = atob(r.data)
+        const arr = new Uint8Array(byteStr.length)
+        for (let j = 0; j < byteStr.length; j++) arr[j] = byteStr.charCodeAt(j)
+        fileMap[`${base}.${ext}`] = [arr, { level: 0 }]
+      }
+
+      const zipped = zipSync(fileMap)
+      const blob = new Blob([zipped], { type: 'application/zip' })
+      triggerDownload(URL.createObjectURL(blob), `imgpress-${Date.now()}.zip`)
     } catch (err) {
       alert('Download failed: ' + err.message)
     }
- 
+
     dlZipBtn.disabled = false
     updateSummary()
   })
@@ -271,11 +321,20 @@
   }
  
   // ── Clear all ─────────────────────────────────────────────────────────────────
- 
+
   clearLink.addEventListener('click', () => {
     items = []; results = {}
+    queue.length = 0
     fileList.innerHTML = ''
     summary.style.display = 'none'
     recompressBtn.style.display = 'none'
     settingsDirty = false
   })
+
+  // ── Event listeners for pill buttons and recompress ──────────────────────────
+
+  document.querySelectorAll('.pill').forEach(btn => {
+    btn.addEventListener('click', () => setPill(btn))
+  })
+
+  recompressBtn.addEventListener('click', recompress)

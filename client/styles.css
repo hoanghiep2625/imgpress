@@ -73,11 +73,12 @@ body::after {
   border-radius: 10px; overflow: hidden; background: var(--card);
 }
 .pill {
-  padding: 11px 14.5px;
+  padding: 11px 10px;
   font-family: 'DM Mono', monospace; font-size: 0.74rem;
   border: none; background: transparent; color: var(--muted);
   cursor: pointer; transition: all 0.18s;
   letter-spacing: 0.04em; text-transform: uppercase;
+  width: 55px;
 }
 .pill.active { background: var(--fg); color: var(--bg); }
 .pill:not(.active):hover { color: var(--fg); }
@@ -97,7 +98,7 @@ input[type=range] { width: 100%; accent-color: var(--accent); cursor: pointer; }
 
 select {
   height: 40px; padding: 0 10px;
-  width: 80px;
+  width: 95px;
   font-size: 0.74rem; font-family: 'DM Mono', monospace;
   border-radius: 10px; border: 1.5px solid var(--card-border);
   background: var(--card); color: var(--fg);
@@ -105,8 +106,8 @@ select {
 }
 
 #recompress-btn {
-  height: 40px; padding: 0 16px;
-  font-size: 0.74rem; font-family: 'DM Mono', monospace;
+  height: 40px; width: 40px;
+  font-size: 1.2rem; font-family: 'DM Mono', monospace;
   border-radius: 10px; border: 1.5px solid var(--accent);
   background: var(--accent); color: #fff;
   cursor: pointer; outline: none; letter-spacing: 0.04em;
@@ -230,13 +231,11 @@ select {
   letter-spacing: 0.05em; text-transform: uppercase; line-height: 2;
 }
 
-@media (max-width: 500px) {
+@media (max-width: 620px) {
   .brand h1 { font-size: 3rem; }
   .page { padding: 40px 16px 60px; }
   .pill-group { width: 100%; }
   .pill { flex:1; text-align: center; }
   .quality-wrap { flex: 1; }
   input[type=range] { width: 100%; accent-color: var(--accent); cursor: pointer; }
-  .brand { margin-bottom: 14px; }
-
 }

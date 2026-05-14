@@ -7,6 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="styles.css">
+  <link rel="icon" type="image/x-icon" href="favicon.ico">
 </head>
 <body>
 <div class="page">
@@ -24,10 +25,11 @@
 
   <div class="controls">
     <div class="pill-group">
-      <button class="pill active" data-val="webp" onclick="setPill(this)">WebP</button>
-      <button class="pill" data-val="avif" onclick="setPill(this)">AVIF</button>
-      <button class="pill" data-val="jpeg" onclick="setPill(this)">JPEG</button>
-      <button class="pill" data-val="png"  onclick="setPill(this)">PNG</button>
+      <button class="pill active" data-val="auto">Auto</button>
+      <button class="pill" data-val="webp">WebP</button>
+      <button class="pill" data-val="avif">AVIF</button>
+      <button class="pill" data-val="jpeg">JPEG</button>
+      <button class="pill" data-val="png">PNG</button>
     </div>
     <div class="quality-wrap">
       <label for="q-range">Q</label>
@@ -35,13 +37,13 @@
       <span id="quality-val">80</span>
     </div>
     <select id="width-sel">
-      <option value="800">800px</option>
-      <option value="1200">1200px</option>
-      <option value="1600" selected>1600px</option>
+      <option value="9999" selected>Original</option>
       <option value="2400">2400px</option>
-      <option value="9999">Original</option>
+      <option value="1600">1600px</option>
+      <option value="1200">1200px</option>
+      <option value="800">800px</option>
     </select>
-    <button id="recompress-btn" onclick="recompress()">Apply</button>
+    <button id="recompress-btn" title="Apply changes">✓</button>
   </div>
 
   <div id="file-list"></div>

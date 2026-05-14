@@ -1,23 +1,69 @@
+import dotenv from 'dotenv'
+import http from 'http'
 import express from 'express'
 import multer from 'multer'
 import sharp from 'sharp'
-import { Readable } from 'stream'
-import { createRequire } from 'module'
 import path from 'path'
 import { fileURLToPath } from 'url'
 
+dotenv.config()
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
-const require = createRequire(import.meta.url)
-const { ZipArchive } = require('archiver')
+
+const config = {
+  PORT: parseInt(process.env.PORT || '3000'),
+  SERVER_TIMEOUT_MS: parseInt(process.env.SERVER_TIMEOUT_MS || '300000'),
+  KEEP_ALIVE_TIMEOUT_MS: parseInt(process.env.KEEP_ALIVE_TIMEOUT_MS || '360000'),
+  HEADERS_TIMEOUT_MS: parseInt(process.env.HEADERS_TIMEOUT_MS || '361000'),
+  MAX_IMAGE_SIDE_PX: parseInt(process.env.MAX_IMAGE_SIDE_PX || '20000'),
+  MAX_IMAGE_MEGAPIXELS: parseInt(process.env.MAX_IMAGE_MEGAPIXELS || '200'),
+  MAX_FILE_SIZE_MB: parseInt(process.env.MAX_FILE_SIZE_MB || '50'),
+  MAX_FILES: parseInt(process.env.MAX_FILES || '20'),
+  COMPRESS_TIMEOUT_MS: parseInt(process.env.COMPRESS_TIMEOUT_MS || '300000'),
+  DEFAULT_QUALITY: parseInt(process.env.DEFAULT_QUALITY || '80'),
+  DEFAULT_WIDTH: parseInt(process.env.DEFAULT_WIDTH || '1600'),
+  MAX_QUALITY_NO_ALPHA: parseInt(process.env.MAX_QUALITY_NO_ALPHA || '85'),
+  MAX_QUALITY_WITH_ALPHA: parseInt(process.env.MAX_QUALITY_WITH_ALPHA || '90'),
+  DITHER_MAX: parseFloat(process.env.DITHER_MAX || '0.7'),
+  DITHER_MIN: parseFloat(process.env.DITHER_MIN || '0.3'),
+  SHARP_CONCURRENCY: parseInt(process.env.SHARP_CONCURRENCY || '0'),
+}
 
 const app = express()
 
 const upload = multer({
-  limits: { fileSize: 50 * 1024 * 1024, files: 20 }
+  limits: {
+    fileSize: (config.MAX_FILE_SIZE_MB) * 1024 * 1024,
+    files: config.MAX_FILES
+  }
 })
 
 sharp.cache(false)
-sharp.concurrency(4)
+sharp.concurrency(config.SHARP_CONCURRENCY)
+
+const MAX_SIDE_PX = config.MAX_IMAGE_SIDE_PX
+const MAX_MEGAPIXELS = config.MAX_IMAGE_MEGAPIXELS
+
+const MIME_TO_FORMAT = {
+  'image/jpeg': 'jpeg', 'image/jpg': 'jpeg',
+  'image/png':  'png',
+  'image/webp': 'webp',
+  'image/avif': 'avif',
+  'image/gif':  'gif',
+  'image/tiff': 'jpeg', 'image/bmp': 'jpeg',
+  'image/heic': 'jpeg', 'image/heif': 'jpeg',
+}
+
+const COMPRESS_TIMEOUT_MS = config.COMPRESS_TIMEOUT_MS
+
+function compressTimeout(req, res, next) {
+  res.setTimeout(COMPRESS_TIMEOUT_MS, () => {
+    if (!res.headersSent) {
+      res.status(503).json({ error: 'Processing timeout — server is busy, please retry.' })
+    }
+  })
+  next()
+}
 
 function parseNumber(value, fallback) {
   const n = Number(value)
@@ -26,8 +72,19 @@ function parseNumber(value, fallback) {
 
 async function analyzeImage(buffer) {
   const meta = await sharp(buffer, { failOn: 'none' }).metadata()
+
+  const w = meta.width  ?? 0
+  const h = meta.height ?? 0
+
+  if (w > MAX_SIDE_PX || h > MAX_SIDE_PX) {
+    throw new Error(`Image too large: ${w}×${h}px (max ${MAX_SIDE_PX}px per side)`)
+  }
+  if (w * h > MAX_MEGAPIXELS * 1_000_000) {
+    throw new Error(`Image too large: ${(w * h / 1_000_000).toFixed(0)}MP (max ${MAX_MEGAPIXELS}MP)`)
+  }
+
   return {
-    width: meta.width ?? 0,
+    width: w,
     channels: meta.channels ?? 3,
     hasAlpha: meta.hasAlpha ?? false,
     isAnimated: (meta.pages ?? 1) > 1,
@@ -37,17 +94,27 @@ async function analyzeImage(buffer) {
 
 function smartQuality(requestedQuality, info) {
   const base = Math.min(Math.max(requestedQuality, 1), 100)
-  if (info.channels >= 3 && !info.hasAlpha) return Math.min(base, 85)
-  return Math.min(base, 90)
+  const maxQualityNoAlpha = config.MAX_QUALITY_NO_ALPHA
+  const maxQualityWithAlpha = config.MAX_QUALITY_WITH_ALPHA
+  if (info.channels >= 3 && !info.hasAlpha) return Math.min(base, maxQualityNoAlpha)
+  return Math.min(base, maxQualityWithAlpha)
 }
 
+function smartDither(q) {
+  const ditherMax = config.DITHER_MAX
+  const ditherMin = config.DITHER_MIN
+  const raw = ditherMax - (q / 100) * (ditherMax - ditherMin)
+  return parseFloat(Math.max(ditherMin, Math.min(ditherMax, raw)).toFixed(2))
+}
 async function compressImage(buffer, options = {}) {
-  const { format = 'webp', quality = 80, width = 1600 } = options
+  const defaultQuality = config.DEFAULT_QUALITY
+  const defaultWidth = config.DEFAULT_WIDTH
+  const { format = 'webp', quality = defaultQuality, width = defaultWidth } = options
   const info = await analyzeImage(buffer)
   const q = smartQuality(quality, info)
 
   let pipeline = sharp(buffer, { failOn: 'none', animated: info.isAnimated })
-    .withMetadata()
+    .withMetadata({ exif: {} })
 
   if (info.width > width) {
     pipeline = pipeline.resize({ width, withoutEnlargement: true, kernel: sharp.kernel.lanczos3 })
@@ -60,13 +127,13 @@ async function compressImage(buffer, options = {}) {
     pipeline = pipeline.jpeg({ quality: q, mozjpeg: true, progressive: true, optimiseCoding: true, trellisQuantisation: true, overshootDeringing: true, optimiseScans: true })
     mime = 'image/jpeg'
   } else if (format === 'png') {
-    pipeline = pipeline.png({ compressionLevel: 9, adaptiveFiltering: true, palette: true, quality: q, effort: 10, dither: 1.0 })
+    pipeline = pipeline.png({ compressionLevel: 9, adaptiveFiltering: true, palette: true, quality: q, effort: 10, dither: smartDither(q) })
     mime = 'image/png'
   } else if (format === 'avif') {
     pipeline = pipeline.avif({ quality: Math.min(q, 70), effort: 6, chromaSubsampling: '4:2:0', lossless: false })
     mime = 'image/avif'
   } else if (format === 'gif') {
-    pipeline = pipeline.gif({ effort: 10, dither: 1.0, interFrameMaxError: 8 })
+    pipeline = pipeline.gif({ effort: 10, dither: smartDither(q), interFrameMaxError: 8 })
     mime = 'image/gif'
   } else {
     pipeline = pipeline.webp({ quality: q, alphaQuality: Math.min(q + 5, 100), smartSubsample: true, effort: 6, lossless: false, nearLossless: false, preset: 'photo' })
@@ -88,16 +155,20 @@ app.use((req, res, next) => {
 
 
 app.get('/', (req, res) => {
-  res.sendFile(path.join(__dirname, '../index.html'))
+  res.sendFile(path.join(__dirname, '../client/index.html'))
 })
 
-app.use(express.static(path.join(__dirname, '..')))
+app.use(express.static(path.join(__dirname, '../client')))
 
 
-app.post('/compress/one', upload.single('file'), async (req, res) => {
+app.post('/compress/one', compressTimeout, upload.single('file'), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: 'file required' })
-    const format   = String(req.query.format  || 'webp')
+
+    const rawFormat = String(req.query.format || 'webp')
+    const format   = rawFormat === 'auto'
+      ? (MIME_TO_FORMAT[req.file.mimetype] ?? 'webp')
+      : rawFormat
     const quality  = parseNumber(req.query.quality, 80)
     const width    = parseNumber(req.query.width, 1600)
     const origSize = req.file.buffer.length
@@ -123,63 +194,19 @@ app.post('/compress/one', upload.single('file'), async (req, res) => {
   }
 })
 
-// ─── Batch → ZIP download ─────────────────────────────────────────────────────
-
-app.post('/compress/zip', upload.any(), async (req, res) => {
-  try {
-    if (!req.files?.length) return res.status(400).json({ error: 'files required' })
-    const format  = String(req.query.format  || 'webp')
-    const quality = parseNumber(req.query.quality, 80)
-    const width   = parseNumber(req.query.width, 1600)
-
-    const results = await Promise.all(
-      req.files.map(async (file) => {
-        try {
-          const { buffer, mime } = await compressImage(file.buffer, { format, quality, width })
-          const ext = mime.split('/')[1] || format
-          const baseName = file.originalname.replace(/\.[^.]+$/, '')
-          return { name: `${baseName}.${ext}`, buffer, ok: true }
-        } catch (err) {
-          return { name: file.originalname, ok: false, error: err.message }
-        }
-      })
-    )
-
-    const successful = results.filter(r => r.ok)
-    if (!successful.length) {
-      return res.status(422).json({ error: 'all files failed to compress' })
-    }
-
-    if (req.files.length === 1 && successful.length === 1) {
-      const r = successful[0]
-      const mime = `image/${r.name.split('.').pop()}`
-      res.setHeader('Content-Type', mime)
-      res.setHeader('Content-Disposition', `attachment; filename="${r.name}"`)
-      return res.send(r.buffer)
-    }
-
-    const zipName = `imgpress-${Date.now()}.zip`
-    res.setHeader('Content-Type', 'application/zip')
-    res.setHeader('Content-Disposition', `attachment; filename="${zipName}"`)
-
-    const archive = new ZipArchive({ zlib: { level: 0 } })
-    archive.on('error', err => { console.error('archiver error', err) })
-    archive.pipe(res)
-
-    for (const r of successful) {
-      archive.append(Readable.from(r.buffer), { name: r.name })
-    }
-
-    await archive.finalize()
-  } catch (err) {
-    console.error(err)
-    if (!res.headersSent) res.status(500).json({ error: 'zip failed' })
-  }
-})
-
 // ─── Start ────────────────────────────────────────────────────────────────────
 
-const PORT = process.env.PORT || 3000
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`image service running on :${PORT}`)
+const PORT = config.PORT
+const serverTimeout = config.SERVER_TIMEOUT_MS
+const keepAliveTimeout = config.KEEP_ALIVE_TIMEOUT_MS
+const headersTimeout = config.HEADERS_TIMEOUT_MS
+
+const server = http.createServer(app)
+
+server.timeout          = serverTimeout
+server.keepAliveTimeout = keepAliveTimeout
+server.headersTimeout   = headersTimeout
+
+server.listen(PORT, '0.0.0.0', () => {
+  console.log(`image service running on :${PORT} (request timeout: ${server.timeout / 1000}s)`)
 })
