@@ -74,9 +74,11 @@ const API_BASE = window.location.origin || 'http://localhost:3000'
     items.forEach(({ id }) => {
       const pb = document.getElementById('pb-' + id)
       const st = document.getElementById('st-' + id)
+      const cmp = document.getElementById('cmp-btn-' + id)
       const dl = document.getElementById('dl-' + id)
       if (pb) pb.style.display = 'block'
       if (st) st.innerHTML = '<span class="badge badge-working">Optimising…</span>'
+      if (cmp) cmp.disabled = true
       if (dl) dl.disabled = true
     })
     summary.style.display = 'none'
@@ -106,49 +108,109 @@ const API_BASE = window.location.origin || 'http://localhost:3000'
   // ── Card DOM ──────────────────────────────────────────────────────────────────
  
   function prependCard({ id, file, originalSize }) {
-    const card = document.createElement('div')
-    card.className = 'file-card'
-    card.id = 'card-' + id
- 
-    const thumb = document.createElement('img')
-    thumb.className = 'file-thumb'
-    thumb.src = URL.createObjectURL(file)
-    thumb.alt = ''
- 
-    const info = document.createElement('div')
-    info.className = 'file-info'
-    info.innerHTML = `
-      <div class="file-name">${file.name}</div>
-      <div class="file-size">${fmtBytes(originalSize)}</div>
-      <div class="progress-bar" id="pb-${id}" style="display:block">
-        <div class="progress-fill"></div>
-      </div>
-      <div class="file-status" id="st-${id}">
-        <span class="badge badge-working">Optimising…</span>
-      </div>`
- 
-    const actions = document.createElement('div')
-    actions.className = 'card-actions'
- 
-    const dlBtn = document.createElement('button')
-    dlBtn.className = 'icon-btn dl'
-    dlBtn.id = 'dl-' + id
-    dlBtn.title = 'Download'
-    dlBtn.innerHTML = '↓'
-    dlBtn.disabled = true
-    dlBtn.addEventListener('click', () => downloadSingle(id))
- 
-    const rmBtn = document.createElement('button')
-    rmBtn.className = 'icon-btn rm'
-    rmBtn.title = 'Remove'
-    rmBtn.innerHTML = '×'
-    rmBtn.addEventListener('click', () => removeCard(id))
- 
-    actions.append(dlBtn, rmBtn)
-    card.append(thumb, info, actions)
- 
-    fileList.prepend(card)
+  const card = document.createElement('div')
+  card.className = 'file-card'
+  card.id = 'card-' + id
+
+  const thumb = document.createElement('img')
+  thumb.className = 'file-thumb'
+  const thumbUrl = URL.createObjectURL(file)
+  thumb.src = thumbUrl
+  thumb.alt = ''
+
+  const info = document.createElement('div')
+  info.className = 'file-info'
+  info.innerHTML = `
+    <div class="file-name">${file.name}</div>
+    <div class="file-size">${fmtBytes(originalSize)}</div>
+    <div class="progress-bar" id="pb-${id}" style="display:block">
+      <div class="progress-fill"></div>
+    </div>
+    <div class="file-status" id="st-${id}">
+      <span class="badge badge-working">Optimising…</span>
+    </div>`
+
+  const compareWrap = document.createElement('div')
+  compareWrap.className = 'compare-wrap'
+  compareWrap.id = 'cmp-' + id
+  compareWrap.style.height = '200px'
+  compareWrap.innerHTML = `
+    <div class="compare-before" id="cmp-before-${id}"></div>
+    <div class="compare-after" id="cmp-after-${id}"></div>
+    <div class="compare-divider" id="cmp-div-${id}"></div>
+    <div class="compare-handle" id="cmp-hdl-${id}"></div>
+    <span class="compare-label compare-label-before">Original</span>
+    <span class="compare-label compare-label-after">Compressed</span>`
+
+  const actions = document.createElement('div')
+  actions.className = 'card-actions'
+
+  const cmpBtn = document.createElement('button')
+  cmpBtn.className = 'icon-btn comp'
+  cmpBtn.id = 'cmp-btn-' + id
+  cmpBtn.title = 'Compare'
+  cmpBtn.innerHTML = '⇄'
+  cmpBtn.disabled = true
+  cmpBtn.addEventListener('click', () => toggleCompare(id))
+
+  const dlBtn = document.createElement('button')
+  dlBtn.className = 'icon-btn dl'
+  dlBtn.id = 'dl-' + id
+  dlBtn.title = 'Download'
+  dlBtn.innerHTML = '↓'
+  dlBtn.disabled = true
+  dlBtn.addEventListener('click', () => downloadSingle(id))
+
+  const rmBtn = document.createElement('button')
+  rmBtn.className = 'icon-btn rm'
+  rmBtn.title = 'Remove'
+  rmBtn.innerHTML = '×'
+  rmBtn.addEventListener('click', () => removeCard(id))
+
+  actions.append(cmpBtn, dlBtn, rmBtn)
+  card.append(thumb, info, actions)
+  card.style.flexWrap = 'wrap'
+  compareWrap.style.width = '100%'
+  compareWrap.style.marginTop = '10px'
+  card.append(compareWrap)
+
+  fileList.prepend(card)
+  document.getElementById('cmp-before-' + id).style.backgroundImage = `url('${thumbUrl}')`
+  initCompareDrag(id, compareWrap)
+}
+
+function toggleCompare(id) {
+  const wrap = document.getElementById('cmp-' + id)
+  const btn  = document.getElementById('cmp-btn-' + id)
+  if (!wrap) return
+  const isOpen = wrap.classList.contains('active')
+  wrap.classList.toggle('active', !isOpen)
+  btn.classList.toggle('active', !isOpen)
+  btn.textContent = isOpen ? '⇄' : '⇄'
+}
+
+function initCompareDrag(id, wrap) {
+  let dragging = false
+
+  function setPosition(clientX) {
+    const rect = wrap.getBoundingClientRect()
+    let pct = (clientX - rect.left) / rect.width
+    pct = Math.max(0.02, Math.min(0.98, pct))
+    const pctPx = (pct * 100).toFixed(2) + '%'
+    document.getElementById('cmp-after-' + id).style.clipPath = `inset(0 0 0 ${(pct * 100).toFixed(2)}%)`
+    document.getElementById('cmp-div-' + id).style.left = pctPx
+    document.getElementById('cmp-hdl-' + id).style.left = pctPx
   }
+
+  wrap.addEventListener('mousedown', e => { dragging = true; setPosition(e.clientX); e.preventDefault() })
+  wrap.addEventListener('touchstart', e => { dragging = true; setPosition(e.touches[0].clientX); e.preventDefault() }, { passive: false })
+
+  document.addEventListener('mousemove', e => { if (dragging) setPosition(e.clientX) })
+  document.addEventListener('touchmove', e => { if (dragging) setPosition(e.touches[0].clientX) }, { passive: false })
+
+  document.addEventListener('mouseup', () => { dragging = false })
+  document.addEventListener('touchend', () => { dragging = false })
+}
  
   function removeCard(id) {
     const card = document.getElementById('card-' + id)
@@ -201,7 +263,17 @@ const API_BASE = window.location.origin || 'http://localhost:3000'
       if (st) st.innerHTML = statusHtml(r)
       const pct = Math.round((1 - r.compressedSize / r.originalSize) * 100)
       if (dl && !r.error && pct > 0) dl.disabled = false
- 
+if (!r.error && pct > 0 && r.data) {
+  const cmpBtn = document.getElementById('cmp-btn-' + id)
+  if (cmpBtn) cmpBtn.disabled = false
+  const mime = r.mime || 'image/webp'
+  const byteStr = atob(r.data)
+  const arr = new Uint8Array(byteStr.length)
+  for (let j = 0; j < byteStr.length; j++) arr[j] = byteStr.charCodeAt(j)
+  const compUrl = URL.createObjectURL(new Blob([arr], { type: mime }))
+  const afterEl = document.getElementById('cmp-after-' + id)
+  if (afterEl) afterEl.style.backgroundImage = `url('${compUrl}')`
+}
     } catch (err) {
       const pb = document.getElementById('pb-' + id)
       const st = document.getElementById('st-' + id)
